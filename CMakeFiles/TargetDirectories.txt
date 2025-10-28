@@ -1,0 +1,6 @@
+/home/asit/SEM-3/C_Arch/final_project/riscv-simulator-2/CMakeFiles/vm.dir
+/home/asit/SEM-3/C_Arch/final_project/riscv-simulator-2/CMakeFiles/run.dir
+/home/asit/SEM-3/C_Arch/final_project/riscv-simulator-2/CMakeFiles/debug.dir
+/home/asit/SEM-3/C_Arch/final_project/riscv-simulator-2/CMakeFiles/valgrind.dir
+/home/asit/SEM-3/C_Arch/final_project/riscv-simulator-2/CMakeFiles/edit_cache.dir
+/home/asit/SEM-3/C_Arch/final_project/riscv-simulator-2/CMakeFiles/rebuild_cache.dir
