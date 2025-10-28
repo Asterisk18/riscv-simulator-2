@@ -111,8 +111,7 @@ void RVSSControlUnit::SetControlSignals(uint32_t instruction) {
     default:
       break;
   }
-
-    
+  
 }
 
 alu::AluOp RVSSControlUnit::GetAluSignal(uint32_t instruction, bool ALUOp) {

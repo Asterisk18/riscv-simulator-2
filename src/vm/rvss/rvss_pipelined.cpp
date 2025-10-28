@@ -56,7 +56,6 @@ void RVSSVM::Decode() {
 
 
   // check for hazards
-  
 
   
   // writing all the control signals in intermediate register

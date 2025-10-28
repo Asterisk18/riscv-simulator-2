@@ -16,6 +16,63 @@
 #include <iostream>
 #include <cstdint>
 
+// adding pipeline registers
+struct IF_ID_Register{
+  uint32_t instruction;
+  uint64_t pc;
+};
+
+struct ID_EX_Register{
+  uint32_t instruction;
+  uint64_t pc = 0;
+  uint64_t reg1_value = 0;
+  uint64_t reg2_value = 0;
+  int32_t imm = 0;
+  uint8_t rs1_num = 0;
+  uint8_t rs2_num = 0;
+  uint8_t rd_num = 0;
+
+  bool reg_write = false;
+  bool mem_read = false;
+  bool mem_write = false;
+  bool mem_to_reg = false;
+  bool alu_src = false;
+  bool branch = false;
+  uint8_t alu_op_{};
+};
+
+
+struct EX_MEM_Register{
+  uint32_t instruction;
+  uint64_t alu_result = 0;
+  uint64_t reg2_value = 0; // Data to be stored
+  uint8_t rd_num = 0;
+  int64_t next_pc = 0;
+  bool branch_taken = false; // Did the branch evaluate to true?
+  uint64_t branch_target_pc = 0; // Where the branch wants to go
+
+  // Control Signals (passed through)
+  bool reg_write = false;
+  bool mem_read = false;
+  bool mem_write = false;
+  bool mem_to_reg = false;
+};
+
+struct MEM_WB_Register{
+  uint32_t instruction;
+  uint64_t memory_read_data = 0;
+  uint64_t alu_result = 0;
+  uint8_t rd_num = 0;
+  int64_t next_pc = 0;
+
+  // Control Signals (passed through)
+  bool reg_write = false;
+  bool mem_to_reg = false;
+};
+
+
+
+
 // TODO: use a circular buffer instead of a stack for undo/redo
 
 struct RegisterChange {
@@ -115,7 +172,7 @@ class RVSSVM : public VmBase {
   // int64_t memory_data_{};
   uint64_t return_address_{};
 
-  bool branch_flag_ = false;
+  bool branch_flag_ = false; 
   int64_t next_pc_{}; // for jal, jalr,
 
   // CSR intermediate variables
@@ -123,6 +180,13 @@ class RVSSVM : public VmBase {
   uint64_t csr_old_value_{};
   uint64_t csr_write_val_{};
   uint8_t csr_uimm_{};
+
+
+  // intermediate registers
+  IF_ID_Register if_id_register;
+  ID_EX_Register id_ex_register;
+  EX_MEM_Register ex_mem_register;
+  MEM_WB_Register mem_wb_register;
 
   void Fetch();
 
