@@ -89,6 +89,8 @@ public:
     // void HandleSyscall();
     void PrintString(uint64_t address);
 
+    
+    // virtual void HazardDetection() = 0;
     virtual void Run() = 0;
     virtual void DebugRun() = 0;
     virtual void Step() = 0;

@@ -182,11 +182,15 @@ class RVSSVM : public VmBase {
   uint8_t csr_uimm_{};
 
 
+  // a
+  bool stall = false;
+  bool hold_pc = false;
+
   // intermediate registers
-  IF_ID_Register if_id_register;
-  ID_EX_Register id_ex_register;
-  EX_MEM_Register ex_mem_register;
-  MEM_WB_Register mem_wb_register;
+  IF_ID_Register if_id_register_read, if_id_register_write;
+  ID_EX_Register id_ex_register_read, id_ex_register_write;
+  EX_MEM_Register ex_mem_register_read, ex_mem_register_write;
+  MEM_WB_Register mem_wb_register_read, mem_wb_register_write;
 
   void Fetch();
 
@@ -210,6 +214,8 @@ class RVSSVM : public VmBase {
   RVSSVM();
   ~RVSSVM();
 
+
+  // void HazardDetection() override;
   void Run() override;
   void DebugRun() override;
   void Step() override;

@@ -1182,7 +1182,3 @@ void RVSSVM::Reset() {
   redo_stack_ = std::stack<StepDelta>();
 
 }
-
-
-
-
