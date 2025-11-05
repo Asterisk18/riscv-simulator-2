@@ -113,9 +113,11 @@ void RVSSVM::Execute() {
     reg2_value = static_cast<uint64_t>(static_cast<int64_t>(imm));
   }
 
-  alu::AluOp aluOperation = control_unit_.GetAluSignal(current_instruction, id_ex_read.alu_op_);
+  alu::AluOp aluOperation = control_unit_.GetAluSignal(id_ex_read.instruction, id_ex_read.alu_op_);
   std::tie(execution_result_, overflow) = alu_.execute(aluOperation, reg1_value, reg2_value);
 
+  // std::cerr << "[Debug] ALU Operation: " << aluOperation <<" "<<reg1_value<<" "<<reg2_value<< std::endl;
+  // std::cout<<execution_result_<<std::endl;
 
   if (id_ex_read.branch) {
     if (opcode==get_instr_encoding(Instruction::kjalr).opcode || 
@@ -165,7 +167,9 @@ void RVSSVM::Execute() {
 
   // if branch taken, then move the PC to its correct location
   if (branch_flag_ && opcode==0b1100011) {
-    UpdateProgramCounter(-4);
+
+    // a -> changed it to -8
+    UpdateProgramCounter(-8);
     UpdateProgramCounter(imm);
     // a
     ex_mem_write.branch_target_pc = program_counter_;
@@ -180,6 +184,7 @@ void RVSSVM::Execute() {
   // adding new data to intermediate register
   ex_mem_write.alu_result = execution_result_;
   ex_mem_write.branch_taken = branch_flag_;
+  branch_flag_ = false;
   ex_mem_write.next_pc = next_pc_;
 
   // std::cout<<"hello"<<ex_mem_register.alu_result<<std::endl;
@@ -466,7 +471,7 @@ void RVSSVM::WriteMemory() {
     return;
   }
 
-  if (control_unit_.GetMemRead()) {
+  if (ex_mem_read.mem_read) {
     switch (funct3) {
       case 0b000: {// LB
         memory_result_ = static_cast<int8_t>(memory_controller_.ReadByte(execution_result));
@@ -506,7 +511,7 @@ void RVSSVM::WriteMemory() {
   // TODO: use direct read to read memory for undo/redo functionality, i.e. ReadByte -> ReadByte_d
 
 
-  if (control_unit_.GetMemWrite()) {
+  if (ex_mem_read.mem_write) {
     switch (funct3) {
       case 0b000: {// SB
         addr = execution_result;
@@ -868,37 +873,78 @@ void RVSSVM::WriteBackCsr() {
 
 // a
 void RVSSVM::HazardDetectionUnit(){
-  stall = false; // setting it initially to false
-  // check for hazards and adds NOPs
+
+  // setting all local control signals to false 
+  stall = forward_from_ex_mem = forward_from_mem_wb = false; 
+
+
+  // check for control hazard
+  if(ex_mem_write.branch_taken){
+    std::cout<<"branch taken"<<std::endl;
+    // if branch is taken then we have to flush first two stage 
+    // and run next iteration from new PC
+    if_id_write = {};
+    id_ex_write = {};
+    ex_mem_write.branch_taken = false;
+    return;
+  }
+
+
+  // check for hazards and change control signals accordingly
   if(ex_mem_write.reg_write && ex_mem_write.rd_num != 0
     && (id_ex_write.rs1_num == ex_mem_write.rd_num || id_ex_write.rs2_num == ex_mem_write.rd_num)){
-    stall = true; // set stall as true
-    // std::cout<<"haha"<<std::endl;
+    // stall = true;
+    forward_from_ex_mem = true;
   } 
   if(mem_wb_write.reg_write && mem_wb_write.rd_num != 0
     && (id_ex_write.rs1_num == mem_wb_write.rd_num || id_ex_write.rs2_num == mem_wb_write.rd_num)){
-    stall = true;
-    // std::cout<<"muah"<<std::endl;
+    // stall = true;
+    forward_from_mem_wb = true;
   }
+
       
 
-  if(stall){
-    // setting all control signals to zero
-    id_ex_read.reg_write = false;
-    id_ex_read.mem_read = false;
-    id_ex_read.mem_write = false;
-    id_ex_read.mem_to_reg = false;
-    id_ex_read.alu_src = false;
-    id_ex_read.branch = false;
-    id_ex_read.alu_op_ = 0;
-    id_ex_read.instruction = 0x13; // NOP instruction
+  // if(stall){
+  //   // setting all control signals to zero
+  //   id_ex_read.reg_write = false;
+  //   id_ex_read.mem_read = false;
+  //   id_ex_read.mem_write = false;
+  //   id_ex_read.mem_to_reg = false;
+  //   id_ex_read.alu_src = false;
+  //   id_ex_read.branch = false;
+  //   id_ex_read.alu_op_ = 0;
+  //   id_ex_read.instruction = 0x13; // NOP instruction
 
-    if_id_read.instruction = 0;
+  //   if_id_read.instruction = 0;
 
-    // id_ex_read = {};
-    UpdateProgramCounter(-8);
-  }
+  //   // id_ex_read = {};
+  //   UpdateProgramCounter(-8);
+  // }
   
+}
+
+
+void RVSSVM::CorrectionUnit(){
+
+  if(forward_from_ex_mem){
+    if(id_ex_write.rs1_num == ex_mem_write.rd_num){
+      id_ex_write.reg1_value = ex_mem_write.alu_result;
+    }
+    if(id_ex_write.rs2_num == ex_mem_write.rd_num){
+      id_ex_write.reg2_value = ex_mem_write.alu_result;
+    }
+  }
+  if(forward_from_mem_wb){
+    if(id_ex_write.rs1_num == mem_wb_write.rd_num){
+      id_ex_write.reg1_value = mem_wb_write.alu_result;
+    }
+    if(id_ex_write.rs2_num == mem_wb_write.rd_num){
+      id_ex_write.reg2_value = mem_wb_write.alu_result;
+    }
+  }
+
+  stall = false;
+
 }
 
 
@@ -918,9 +964,14 @@ void RVSSVM::Run() {
     Decode();
     Fetch();
 
+    // std::cout<<mem_wb_read.instruction<<std::endl;
+
+    // write a function to reset all the control signals in the orginal header to defaults, eg: bool branch_taken_ should be set to false etc
+
+
     // check for hazards and do the needful
     HazardDetectionUnit();
-    // std::cout<<"boobs: "<<id_ex_read.reg_write<<std::endl;
+    CorrectionUnit();
 
     // moving the data forward
     if(!stall){

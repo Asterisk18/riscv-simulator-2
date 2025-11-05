@@ -18,12 +18,12 @@
 
 // adding pipeline registers
 struct IF_ID_Register{
-  uint32_t instruction;
-  uint64_t pc;
+  uint32_t instruction = 0x13;
+  uint64_t pc = 0;
 };
 
 struct ID_EX_Register{
-  uint32_t instruction;
+  uint32_t instruction = 0x13;
   uint64_t pc = 0;
   uint64_t reg1_value = 0;
   uint64_t reg2_value = 0;
@@ -185,12 +185,15 @@ class RVSSVM : public VmBase {
   // a
   bool stall = false;
   bool hold_pc = false;
+  bool forward_from_ex_mem = false;
+  bool forward_from_mem_wb = false;
 
   // intermediate registers
   IF_ID_Register if_id_read, if_id_write;
   ID_EX_Register id_ex_read, id_ex_write;
   EX_MEM_Register ex_mem_read, ex_mem_write;
   MEM_WB_Register mem_wb_read, mem_wb_write;
+  // --
 
   void Fetch();
 
@@ -215,7 +218,12 @@ class RVSSVM : public VmBase {
   ~RVSSVM();
 
 
+  // a
   void HazardDetectionUnit() override;
+  void CorrectionUnit() override;
+  // --
+
+
   void Run() override;
   void DebugRun() override;
   void Step() override;
