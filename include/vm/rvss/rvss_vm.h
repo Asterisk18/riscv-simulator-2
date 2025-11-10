@@ -187,6 +187,7 @@ class RVSSVM : public VmBase {
   bool hold_pc = false;
   bool forward_from_ex_mem = false;
   bool forward_from_mem_wb = false;
+  bool load_use_hazard = false;
 
   // intermediate registers
   IF_ID_Register if_id_read, if_id_write;

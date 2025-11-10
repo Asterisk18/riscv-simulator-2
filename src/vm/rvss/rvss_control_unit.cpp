@@ -106,8 +106,6 @@ void RVSSControlUnit::SetControlSignals(uint32_t instruction) {
     }
 
 
-
-
     default:
       break;
   }

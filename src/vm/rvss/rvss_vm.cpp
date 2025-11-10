@@ -42,15 +42,29 @@ void RVSSVM::Fetch() {
 
 
 void RVSSVM::Decode() {
+
+  // clearing the write register, so that we don't have any previous instruction's data in it
+  id_ex_write = {};
   
   uint32_t current_instruction = if_id_read.instruction;
+  uint8_t opcode = current_instruction & 0b1111111;
+  uint8_t funct3 = (current_instruction >> 12) & 0b111;
   control_unit_.SetControlSignals(current_instruction);
   
   // write the value of rs1, rs2 and other stuff in the id_ex_register
   id_ex_write.pc = if_id_read.pc;
   id_ex_write.instruction = if_id_read.instruction;
-  id_ex_write.rs1_num = (current_instruction >> 15) & 0b11111;
-  id_ex_write.rs2_num = (current_instruction >> 20) & 0b11111;
+
+  if(opcode == 0b1110011 && funct3 == 0b000){ // its an ecall instruction
+    // in such case I am hard coding the value of rs1 and rs2 to be x10 and x17, this automatically takes care of any hazards
+    id_ex_write.rs1_num = 10; // a0
+    id_ex_write.rs2_num = 17; // a7
+  }
+  else{
+    id_ex_write.rs1_num = (current_instruction >> 15) & 0b11111;
+    id_ex_write.rs2_num = (current_instruction >> 20) & 0b11111;
+  }
+
   id_ex_write.imm = ImmGenerator(current_instruction);
   id_ex_write.reg1_value = registers_.ReadGpr(id_ex_write.rs1_num);
   id_ex_write.reg2_value = registers_.ReadGpr(id_ex_write.rs2_num);
@@ -67,6 +81,11 @@ void RVSSVM::Decode() {
 }
 
 void RVSSVM::Execute() {
+  // a
+  execution_result_ = 0;
+  // clearing the write register, so that we don't have any previous instruction's data in it
+  ex_mem_write = {};
+
   uint32_t current_instruction = id_ex_read.instruction;
   uint8_t opcode = current_instruction & 0b1111111;
   uint8_t funct3 = (current_instruction >> 12) & 0b111;
@@ -116,17 +135,23 @@ void RVSSVM::Execute() {
   alu::AluOp aluOperation = control_unit_.GetAluSignal(id_ex_read.instruction, id_ex_read.alu_op_);
   std::tie(execution_result_, overflow) = alu_.execute(aluOperation, reg1_value, reg2_value);
 
-  // std::cerr << "[Debug] ALU Operation: " << aluOperation <<" "<<reg1_value<<" "<<reg2_value<< std::endl;
+  // std::cerr << "ALU Operation: " << aluOperation <<" "<<reg1_value<<" "<<reg2_value<< std::endl;
   // std::cout<<execution_result_<<std::endl;
 
   if (id_ex_read.branch) {
     if (opcode==get_instr_encoding(Instruction::kjalr).opcode || 
         opcode==get_instr_encoding(Instruction::kjal).opcode) {
-      next_pc_ = static_cast<int64_t>(program_counter_); // PC was already updated in Fetch()
-      UpdateProgramCounter(-4);
-      return_address_ = program_counter_ + 4;
+      
+      // a
+      branch_flag_ = true;
+
+      // next_pc_ = static_cast<int64_t>(id_ex_read.pc+4); // next insruction is at PC+4
+
+      UpdateProgramCounter(-8); // changed it to -8 from -4, because there is one instruction fetched after Jal one, so the PC has moved twice
+
+      return_address_ = id_ex_read.pc + 4;
       if (opcode==get_instr_encoding(Instruction::kjalr).opcode) { 
-        UpdateProgramCounter(-program_counter_ + (execution_result_));
+        UpdateProgramCounter(-id_ex_read.pc + (execution_result_));
       } else if (opcode==get_instr_encoding(Instruction::kjal).opcode) {
         UpdateProgramCounter(imm);
       }
@@ -184,8 +209,11 @@ void RVSSVM::Execute() {
   // adding new data to intermediate register
   ex_mem_write.alu_result = execution_result_;
   ex_mem_write.branch_taken = branch_flag_;
+  ex_mem_write.next_pc = return_address_;
+  
+
+  // a set the signal to default after using it
   branch_flag_ = false;
-  ex_mem_write.next_pc = next_pc_;
 
   // std::cout<<"hello"<<ex_mem_register.alu_result<<std::endl;
 
@@ -277,9 +305,15 @@ void RVSSVM::ExecuteCsr() {
   csr_uimm_ = rs1;
 }
 
-// TODO: implement writeback for syscalls
+// for the current implementation syscall READ and WRITE may have data hazard in its implementation, 
+// as they are still directly reading from teh register file
 void RVSSVM::HandleSyscall() {
-  uint64_t syscall_number = registers_.ReadGpr(17);
+  // uint64_t syscall_number = registers_.ReadGpr(17);
+
+  // a
+  uint64_t syscall_number = id_ex_read.reg2_value;
+  uint64_t argument = id_ex_read.reg1_value;
+
   switch (syscall_number) {
     case SYSCALL_PRINT_INT: {
         if (!globals::vm_as_backend) {
@@ -287,7 +321,7 @@ void RVSSVM::HandleSyscall() {
         } else {
           std::cout << "VM_STDOUT_START";
         }
-        std::cout << static_cast<int64_t>(registers_.ReadGpr(10)); // Print signed integer
+        std::cout << static_cast<int64_t>(argument); // Print signed integer
         if (!globals::vm_as_backend) {
             std::cout << "]" << std::endl;
         } else {
@@ -302,7 +336,7 @@ void RVSSVM::HandleSyscall() {
           std::cout << "VM_STDOUT_START";
         }
         float float_value;
-        uint64_t raw = registers_.ReadGpr(10);
+        uint64_t raw = argument;
         std::memcpy(&float_value, &raw, sizeof(float_value));
         std::cout << std::setprecision(std::numeric_limits<float>::max_digits10) << float_value;
         if (!globals::vm_as_backend) {
@@ -319,7 +353,7 @@ void RVSSVM::HandleSyscall() {
           std::cout << "VM_STDOUT_START";
         }
         double double_value;
-        uint64_t raw = registers_.ReadGpr(10);
+        uint64_t raw = argument;
         std::memcpy(&double_value, &raw, sizeof(double_value));
         std::cout << std::setprecision(std::numeric_limits<double>::max_digits10) << double_value;
         if (!globals::vm_as_backend) {
@@ -333,7 +367,7 @@ void RVSSVM::HandleSyscall() {
         if (!globals::vm_as_backend) {
             std::cout << "[Syscall output: ";
         }
-        PrintString(registers_.ReadGpr(10)); // Print string
+        PrintString(argument); // Print string
         if (!globals::vm_as_backend) {
             std::cout << "]" << std::endl;
         }
@@ -345,12 +379,12 @@ void RVSSVM::HandleSyscall() {
             std::cout << "VM_EXIT" << std::endl;
         }
         output_status_ = "VM_EXIT";
-        std::cout << "Exited with exit code: " << registers_.ReadGpr(10) << std::endl;
+        std::cout << "Exited with exit code: " << argument << std::endl;
         exit(0); // Exit the program
         break;
     }
     case SYSCALL_READ: { // Read
-      uint64_t file_descriptor = registers_.ReadGpr(10);
+      uint64_t file_descriptor = argument;
       uint64_t buffer_address = registers_.ReadGpr(11);
       uint64_t length = registers_.ReadGpr(12);
 
@@ -396,7 +430,7 @@ void RVSSVM::HandleSyscall() {
           new_bytes_vec
         });
 
-        uint64_t old_reg = registers_.ReadGpr(10);
+        uint64_t old_reg = argument;
         unsigned int reg_index = 10;
         unsigned int reg_type = 0; // 0 for GPR, 1 for CSR, 2 for FPR
         uint64_t new_reg = std::min(static_cast<uint64_t>(length), static_cast<uint64_t>(input.size()));
@@ -411,7 +445,7 @@ void RVSSVM::HandleSyscall() {
       break;
     }
     case SYSCALL_WRITE: { // Write
-        uint64_t file_descriptor = registers_.ReadGpr(10);
+        uint64_t file_descriptor = argument;
         uint64_t buffer_address = registers_.ReadGpr(11);
         uint64_t length = registers_.ReadGpr(12);
 
@@ -431,7 +465,7 @@ void RVSSVM::HandleSyscall() {
           output_status_ = "VM_STDOUT_END";
           std::cout << "VM_STDOUT_END" << std::endl;
 
-          uint64_t old_reg = registers_.ReadGpr(10);
+          uint64_t old_reg = argument;
           unsigned int reg_index = 10;
           unsigned int reg_type = 0; // 0 for GPR, 1 for CSR, 2 for FPR
           uint64_t new_reg = std::min(static_cast<uint64_t>(length), bytes_printed);
@@ -453,6 +487,11 @@ void RVSSVM::HandleSyscall() {
 
 // reads from ex_mem_register and writes to mem_wb_register
 void RVSSVM::WriteMemory() {
+  // a
+  memory_result_ = 0;
+  // clearing the write register, so that we don't have any previous instruction's data in it
+  mem_wb_write = {};
+
   uint32_t current_instruction = ex_mem_read.instruction;
   uint64_t execution_result = ex_mem_read.alu_result;
   uint8_t opcode = current_instruction & 0b1111111;
@@ -516,7 +555,7 @@ void RVSSVM::WriteMemory() {
       case 0b000: {// SB
         addr = execution_result;
         old_bytes_vec.push_back(memory_controller_.ReadByte(addr));
-        memory_controller_.WriteByte(execution_result, registers_.ReadGpr(rs2) & 0xFF);
+        memory_controller_.WriteByte(execution_result, ex_mem_read.reg2_value & 0xFF);
         new_bytes_vec.push_back(memory_controller_.ReadByte(addr));
         break;
       }
@@ -525,7 +564,7 @@ void RVSSVM::WriteMemory() {
         for (size_t i = 0; i < 2; ++i) {
           old_bytes_vec.push_back(memory_controller_.ReadByte(addr + i));
         }
-        memory_controller_.WriteHalfWord(execution_result, registers_.ReadGpr(rs2) & 0xFFFF);
+        memory_controller_.WriteHalfWord(execution_result, ex_mem_read.reg2_value & 0xFFFF);
         for (size_t i = 0; i < 2; ++i) {
           new_bytes_vec.push_back(memory_controller_.ReadByte(addr + i));
         }
@@ -536,18 +575,19 @@ void RVSSVM::WriteMemory() {
         for (size_t i = 0; i < 4; ++i) {
           old_bytes_vec.push_back(memory_controller_.ReadByte(addr + i));
         }
-        memory_controller_.WriteWord(execution_result, registers_.ReadGpr(rs2) & 0xFFFFFFFF);
+        memory_controller_.WriteWord(execution_result, ex_mem_read.reg2_value & 0xFFFFFFFF);
         for (size_t i = 0; i < 4; ++i) {
           new_bytes_vec.push_back(memory_controller_.ReadByte(addr + i));
         }
         break;
       }
       case 0b011: {// SD
+        std::cout<<execution_result<<std::endl;
         addr = execution_result;
         for (size_t i = 0; i < 8; ++i) {
           old_bytes_vec.push_back(memory_controller_.ReadByte(addr + i));
         }
-        memory_controller_.WriteDoubleWord(execution_result, registers_.ReadGpr(rs2) & 0xFFFFFFFFFFFFFFFF);
+        memory_controller_.WriteDoubleWord(execution_result, ex_mem_read.reg2_value & 0xFFFFFFFFFFFFFFFF);
         for (size_t i = 0; i < 8; ++i) {
           new_bytes_vec.push_back(memory_controller_.ReadByte(addr + i));
         }
@@ -671,20 +711,20 @@ void RVSSVM::WriteBack() {
       case get_instr_encoding(Instruction::kRtype).opcode: /* R-Type */
       case get_instr_encoding(Instruction::kItype).opcode: /* I-Type */
       case get_instr_encoding(Instruction::kauipc).opcode: /* AUIPC */ {
-        registers_.WriteGpr(rd, mem_wb_read.alu_result);
+        registers_.WriteGpr(mem_wb_read.rd_num, mem_wb_read.alu_result);
         break;
       }
       case get_instr_encoding(Instruction::kLoadType).opcode: /* Load */ { 
-        registers_.WriteGpr(rd, mem_wb_read.memory_read_data);
+        registers_.WriteGpr(mem_wb_read.rd_num, mem_wb_read.memory_read_data);
         break;
       }
       case get_instr_encoding(Instruction::kjalr).opcode: /* JALR */
       case get_instr_encoding(Instruction::kjal).opcode: /* JAL */ {
-        registers_.WriteGpr(rd, mem_wb_read.next_pc);
+        registers_.WriteGpr(mem_wb_read.rd_num, mem_wb_read.next_pc);
         break;
       }
       case get_instr_encoding(Instruction::klui).opcode: /* LUI */ {
-        registers_.WriteGpr(rd, (imm << 12));
+        registers_.WriteGpr(mem_wb_read.rd_num, (imm << 12));
         break;
       }
       default: break;
@@ -875,15 +915,18 @@ void RVSSVM::WriteBackCsr() {
 void RVSSVM::HazardDetectionUnit(){
 
   // setting all local control signals to false 
-  stall = forward_from_ex_mem = forward_from_mem_wb = false; 
+  stall = forward_from_ex_mem = forward_from_mem_wb = load_use_hazard = false; 
 
 
   // check for control hazard
   if(ex_mem_write.branch_taken){
     std::cout<<"branch taken"<<std::endl;
-    // if branch is taken then we have to flush first two stage 
+    // if branch is taken then we have to flush only second stage 
     // and run next iteration from new PC
-    if_id_write = {};
+
+    // if_id_write = {}; // we dont need this as the instruction fetched after running the excute stage 
+    // will be from the taken branch so its correct instruction, no need to flush it
+
     id_ex_write = {};
     ex_mem_write.branch_taken = false;
     return;
@@ -893,13 +936,33 @@ void RVSSVM::HazardDetectionUnit(){
   // check for hazards and change control signals accordingly
   if(ex_mem_write.reg_write && ex_mem_write.rd_num != 0
     && (id_ex_write.rs1_num == ex_mem_write.rd_num || id_ex_write.rs2_num == ex_mem_write.rd_num)){
+    
     // stall = true;
-    forward_from_ex_mem = true;
+    
+    if(ex_mem_write.mem_read){ // its a load instruction, we must add NOP
+      // adding NOP
+      UpdateProgramCounter(-4);
+      if_id_write.pc = id_ex_write.pc;
+      if_id_write.instruction = id_ex_write.instruction;
+
+      id_ex_write = {};
+      return;
+    }
+    else{
+      forward_from_ex_mem = true;
+    }
   } 
+
   if(mem_wb_write.reg_write && mem_wb_write.rd_num != 0
     && (id_ex_write.rs1_num == mem_wb_write.rd_num || id_ex_write.rs2_num == mem_wb_write.rd_num)){
     // stall = true;
-    forward_from_mem_wb = true;
+    if(mem_wb_write.mem_to_reg){ // its a load instruction
+      // in this case we need to forward memory_read_data instead of ALU_result
+      load_use_hazard = true;
+    }
+    else{
+      forward_from_mem_wb = true;
+    }
   }
 
       
@@ -934,7 +997,16 @@ void RVSSVM::CorrectionUnit(){
       id_ex_write.reg2_value = ex_mem_write.alu_result;
     }
   }
-  if(forward_from_mem_wb){
+  
+  if(load_use_hazard){ // forwarding mem_read_data
+    if(id_ex_write.rs1_num == mem_wb_write.rd_num){
+      id_ex_write.reg1_value = mem_wb_write.memory_read_data;
+    }
+    if(id_ex_write.rs2_num == mem_wb_write.rd_num){
+      id_ex_write.reg2_value = mem_wb_write.memory_read_data;
+    }
+  }
+  if(forward_from_mem_wb){ // forwarding alu result
     if(id_ex_write.rs1_num == mem_wb_write.rd_num){
       id_ex_write.reg1_value = mem_wb_write.alu_result;
     }
