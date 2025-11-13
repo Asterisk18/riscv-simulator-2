@@ -8,6 +8,7 @@
 #include "vm/alu.h"
 
 #include <cstdint>
+#include<bits/stdc++.h>
 
 #include "common/instructions.h"
 using instruction_set::Instruction;
@@ -21,6 +22,9 @@ void RVSSControlUnit::SetControlSignals(uint32_t instruction) {
 
   alu_src_ = mem_to_reg_ = reg_write_ = mem_read_ = mem_write_ = branch_ = false;
   alu_op_ = false;
+
+  // a
+  rs1_is_fpr = rs2_is_fpr = rd_is_fpr = false;
 
   switch (opcode) {
     case 0b0110011: /* R-type (kAdd, kSub, kAnd, kOr, kXor, kSll, kSrl, etc.) */ {
@@ -86,25 +90,70 @@ void RVSSControlUnit::SetControlSignals(uint32_t instruction) {
 
 
         // F extension + D extension
-    case 0b0000111: {// F-Type Load instructions (FLW, FLD)
+    case 0b0000111: {// F-Type Load instructions (FLW, FLD) fcvt.s.w
       alu_src_ = true;
       mem_to_reg_ = true;
       reg_write_ = true;
       mem_read_ = true;
+
+      // a
+    //   std::cout<<"here"<<std::endl;
+      rd_is_fpr = true;
       break;
     }
     case 0b0100111: {// F-Type Store instructions (FSW, FSD)
       alu_src_ = true;
       alu_op_ = true;
       mem_write_ = true;
-      break;
-    }
-    case 0b1010011: {// F-Type R-type instructions (FADD, FSUB, FMUL, FDIV, etc.)
-      reg_write_ = true;
-      alu_op_ = true;
+
+      // a
+      rs2_is_fpr = true;
       break;
     }
 
+    // case 0b1010011: {// F-Type R-type instructions (FADD, FSUB, FMUL, FDIV, etc.)
+    //   reg_write_ = true;
+    //   alu_op_ = true;
+
+    //   // a
+    //   rs1_is_fpr = rs2_is_fpr = rd_is_fpr = true;
+    //   break;
+    // }
+
+    case 0b1010011: {// F-Type R-type instructions, where one register is GPR and one is FPR
+      reg_write_ = true;
+      alu_op_ = true;
+      
+      uint8_t funct7 = (instruction >> 25) & 0b1111111;
+
+      rs1_is_fpr = true;
+      rs2_is_fpr = true; 
+      rd_is_fpr = true;
+
+      if (funct7 == 0b1101000 || funct7 == 0b1111000) { // fcvt.s.w (Int to Float), fmv.w.x (Move Int to Float)
+         rs1_is_fpr = false; // reading value from GPR
+         rs2_is_fpr = false; 
+      }
+      
+      if (funct7 == 0b1100000 || funct7 == 0b1110000 || funct7 == 0b1010000) { // fcvt.w.s (Float to Int), fmv.x.w (Move Float to Int)
+         rd_is_fpr = false; // Write to GPR
+      }
+      break;
+    }
+
+    case 0b1000011: // FMADD
+    case 0b1000111: // FMSUB
+    case 0b1001011: // FNMSUB
+    case 0b1001111: // FNMADD
+    {
+      reg_write_ = true;
+      alu_op_ = true;
+      // FMA uses 3 source registers, all Floats
+      rs1_is_fpr = true;
+      rs2_is_fpr = true;
+      rd_is_fpr = true; 
+      break;
+    }
 
     default:
       break;

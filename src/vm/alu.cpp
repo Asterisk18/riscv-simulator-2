@@ -248,6 +248,7 @@ static std::string decode_fclass(uint16_t res) {
   std::memcpy(&c, &inc, sizeof(float));
   float result = 0.0;
 
+  // std::cout<<"here: "<<a<<" "<<b<<" "<<c<<std::endl; 
   uint8_t fcsr = 0;
 
   int original_rm = std::fegetround();
@@ -537,6 +538,7 @@ static std::string decode_fclass(uint16_t res) {
   std::memcpy(&b, &inb, sizeof(double));
   std::memcpy(&c, &inc, sizeof(double));
   double result = 0.0;
+
 
   uint8_t fcsr = 0;
 

@@ -36,6 +36,10 @@ class ControlUnit {
   [[nodiscard]] bool GetMemWrite() const;
   [[nodiscard]] uint8_t GetAluOp() const;
   [[nodiscard]] bool GetBranch() const;
+  // a
+  [[nodiscard]] bool GetRs1IsFpr() const;
+  [[nodiscard]] bool GetRs2IsFpr() const;
+  [[nodiscard]] bool GetRdIsFpr() const;
 
  protected:
   bool reg_write_ = false;
@@ -45,6 +49,11 @@ class ControlUnit {
   bool mem_write_ = false;
   bool mem_to_reg_ = false;
   bool pc_src_ = false;
+
+  // a
+  bool rs1_is_fpr = false;
+  bool rs2_is_fpr = false;
+  bool rd_is_fpr = false;
 
   uint8_t alu_op_{};
 };

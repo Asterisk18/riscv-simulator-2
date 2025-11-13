@@ -31,6 +31,9 @@ struct ID_EX_Register{
   uint8_t rs1_num = 0;
   uint8_t rs2_num = 0;
   uint8_t rd_num = 0;
+  bool rd_is_fpr = false;
+  bool rs1_is_fpr = true;
+  bool rs2_is_fpr = true;
 
   bool reg_write = false;
   bool mem_read = false;
@@ -44,12 +47,16 @@ struct ID_EX_Register{
 
 struct EX_MEM_Register{
   uint32_t instruction;
+  uint64_t pc = 0;
   uint64_t alu_result = 0;
   uint64_t reg2_value = 0; // Data to be stored
   uint8_t rd_num = 0;
   int64_t next_pc = 0;
   bool branch_taken = false; // Did the branch evaluate to true?
   uint64_t branch_target_pc = 0; // Where the branch wants to go
+  bool rd_is_fpr = false;
+  bool rs1_is_fpr = true;
+  bool rs2_is_fpr = true;
 
   // Control Signals (passed through)
   bool reg_write = false;
@@ -60,10 +67,14 @@ struct EX_MEM_Register{
 
 struct MEM_WB_Register{
   uint32_t instruction;
+  uint64_t pc = 0;
   uint64_t memory_read_data = 0;
   uint64_t alu_result = 0;
   uint8_t rd_num = 0;
   int64_t next_pc = 0;
+  bool rd_is_fpr = false;
+  bool rs1_is_fpr = true;
+  bool rs2_is_fpr = true;
 
   // Control Signals (passed through)
   bool reg_write = false;
@@ -188,6 +199,7 @@ class RVSSVM : public VmBase {
   bool forward_from_ex_mem = false;
   bool forward_from_mem_wb = false;
   bool load_use_hazard = false;
+  bool jal_jalr_hazard = false;
 
   // intermediate registers
   IF_ID_Register if_id_read, if_id_write;

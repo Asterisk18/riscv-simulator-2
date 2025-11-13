@@ -38,17 +38,6 @@ void RVSSVM::Fetch() {
   if_id_write.instruction = memory_controller_.ReadWord(program_counter_);
   if_id_write.pc = program_counter_;
   UpdateProgramCounter(4);
-  
-  // if (program_counter_ >= program_size_) {
-  //   // Inject NOP (addi x0, x0, 0)
-  //   if_id_write.instruction = 0x13; 
-  //   if_id_write.pc = program_counter_;
-  //   // Don't increment PC
-  // } else {
-  //   if_id_write.instruction = memory_controller_.ReadWord(program_counter_);
-  //   if_id_write.pc = program_counter_;
-  //   UpdateProgramCounter(4);
-  // }
 }
 
 
@@ -61,6 +50,10 @@ void RVSSVM::Decode() {
   uint8_t opcode = current_instruction & 0b1111111;
   uint8_t funct3 = (current_instruction >> 12) & 0b111;
   control_unit_.SetControlSignals(current_instruction);
+  
+  // write the value of rs1, rs2 and other stuff in the id_ex_register
+  id_ex_write.pc = if_id_read.pc;
+  id_ex_write.instruction = if_id_read.instruction;
 
   if(opcode == 0b1110011 && funct3 == 0b000){ // its an ecall instruction
     // in such case I am hard coding the value of rs1 and rs2 to be x10 and x17, this automatically takes care of any hazards
@@ -72,30 +65,9 @@ void RVSSVM::Decode() {
     id_ex_write.rs2_num = (current_instruction >> 20) & 0b11111;
   }
 
-  // reading from FPR or GPR depending upon control signal
-  if (control_unit_.GetRs1IsFpr()) {
-    id_ex_write.reg1_value = registers_.ReadFpr(id_ex_write.rs1_num);
-  } else {
-    id_ex_write.reg1_value = registers_.ReadGpr(id_ex_write.rs1_num);
-  }
-
-  if (control_unit_.GetRs2IsFpr()) {
-    id_ex_write.reg2_value = registers_.ReadFpr(id_ex_write.rs2_num);
-  } else {
-    id_ex_write.reg2_value = registers_.ReadGpr(id_ex_write.rs2_num);
-  }
-
-  // std::cout<<id_ex_write.reg1_value<<" "<<id_ex_write.reg2_value<<std::endl;
-  // id_ex_write.reg1_value = registers_.ReadGpr(id_ex_write.rs1_num);
-  // id_ex_write.reg2_value = registers_.ReadGpr(id_ex_write.rs2_num);
-
-
-  // forwarding data
-  id_ex_write.pc = if_id_read.pc;
-  id_ex_write.instruction = if_id_read.instruction;
-  id_ex_write.pc = if_id_read.pc;
-
   id_ex_write.imm = ImmGenerator(current_instruction);
+  id_ex_write.reg1_value = registers_.ReadGpr(id_ex_write.rs1_num);
+  id_ex_write.reg2_value = registers_.ReadGpr(id_ex_write.rs2_num);
   id_ex_write.rd_num = (current_instruction >> 7) & 0b11111;
       
   id_ex_write.alu_op_ = control_unit_.GetAluOp();
@@ -105,9 +77,7 @@ void RVSSVM::Decode() {
   id_ex_write.mem_to_reg = control_unit_.GetMemToReg();
   id_ex_write.alu_src = control_unit_.GetAluSrc();
   id_ex_write.branch = control_unit_.GetBranch();  
-  id_ex_write.rd_is_fpr = control_unit_.GetRdIsFpr(); // passing, if we are writing the result to FPR or not
-  id_ex_write.rs1_is_fpr = control_unit_.GetRs1IsFpr();
-  id_ex_write.rs2_is_fpr = control_unit_.GetRs2IsFpr();
+  
 }
 
 void RVSSVM::Execute() {
@@ -131,7 +101,7 @@ void RVSSVM::Execute() {
     return;
   } else if (instruction_set::isDInstruction(current_instruction)) {
     ExecuteDouble();
-    // return;
+    return;
   } else if (opcode==0b1110011) {
     ExecuteCsr();
     return;
@@ -147,7 +117,7 @@ void RVSSVM::Execute() {
   // int32_t imm = ImmGenerator(current_instruction);
   
   // a
-  int32_t imm = id_ex_read.imm;
+  uint32_t imm = id_ex_read.imm;
 
   // uint64_t reg1_value = registers_.ReadGpr(rs1);
   // uint64_t reg2_value = registers_.ReadGpr(rs2);
@@ -162,19 +132,11 @@ void RVSSVM::Execute() {
     reg2_value = static_cast<uint64_t>(static_cast<int64_t>(imm));
   }
 
-  // previously LUI 12 bit shift was done in the writeback stage, but it will give wrong answer if we forward it from ex_mem stage
-  // so now we are directly shifting it here
-  if (opcode == 0b0110111) { // LUI
-      reg1_value = 0;
-      reg2_value = static_cast<uint64_t>(static_cast<int64_t>(imm) << 12);
-  }
-
   alu::AluOp aluOperation = control_unit_.GetAluSignal(id_ex_read.instruction, id_ex_read.alu_op_);
   std::tie(execution_result_, overflow) = alu_.execute(aluOperation, reg1_value, reg2_value);
 
-  std::cout<< "PC =====> "<< id_ex_read.pc <<std::endl;
-  std::cerr << "ALU Operation: " << aluOperation <<" "<<reg1_value<<" "<<reg2_value<< std::endl;
-  std::cout<<execution_result_<<std::endl;
+  // std::cerr << "ALU Operation: " << aluOperation <<" "<<reg1_value<<" "<<reg2_value<< std::endl;
+  // std::cout<<execution_result_<<std::endl;
 
   if (id_ex_read.branch) {
     if (opcode==get_instr_encoding(Instruction::kjalr).opcode || 
@@ -252,12 +214,10 @@ void RVSSVM::Execute() {
 
   // a set the signal to default after using it
   branch_flag_ = false;
-  return_address_ = 0;
 
   // std::cout<<"hello"<<ex_mem_register.alu_result<<std::endl;
 
   // forwarding the current values from the intermediate registers
-  ex_mem_write.pc = id_ex_read.pc;
   ex_mem_write.instruction = id_ex_read.instruction;
   ex_mem_write.rd_num = id_ex_read.rd_num;
   ex_mem_write.reg2_value = id_ex_read.reg2_value;
@@ -265,80 +225,42 @@ void RVSSVM::Execute() {
   ex_mem_write.mem_read = id_ex_read.mem_read;
   ex_mem_write.mem_write = id_ex_read.mem_write;
   ex_mem_write.mem_to_reg = id_ex_read.mem_to_reg;
-  ex_mem_write.rd_is_fpr = id_ex_read.rd_is_fpr;
-  ex_mem_write.rs1_is_fpr = id_ex_read.rs1_is_fpr;
-  ex_mem_write.rs2_is_fpr = id_ex_read.rs2_is_fpr;
 }
 
 void RVSSVM::ExecuteFloat() {
-  // std::cout<<"executing float"<<std::endl;
-  uint64_t current_instruction = id_ex_read.instruction;
-  uint8_t opcode = current_instruction & 0b1111111;
-  uint8_t funct3 = (current_instruction >> 12) & 0b111;
-  uint8_t funct7 = (current_instruction >> 25) & 0b1111111;
+  uint8_t opcode = current_instruction_ & 0b1111111;
+  uint8_t funct3 = (current_instruction_ >> 12) & 0b111;
+  uint8_t funct7 = (current_instruction_ >> 25) & 0b1111111;
   uint8_t rm = funct3;
-  uint8_t rs1 = (current_instruction >> 15) & 0b11111;
-  uint8_t rs2 = (current_instruction >> 20) & 0b11111;
-  uint8_t rs3 = (current_instruction >> 27) & 0b11111;
+  uint8_t rs1 = (current_instruction_ >> 15) & 0b11111;
+  uint8_t rs2 = (current_instruction_ >> 20) & 0b11111;
+  uint8_t rs3 = (current_instruction_ >> 27) & 0b11111;
 
   uint8_t fcsr_status = 0;
 
-  int32_t imm = ImmGenerator(current_instruction);
+  int32_t imm = ImmGenerator(current_instruction_);
 
-  if (rm==0b111) { // not doing it now, CSR later
+  if (rm==0b111) {
     rm = registers_.ReadCsr(0x002);
   }
 
-  // data hazard is not dealt with
-  uint64_t reg1_value = id_ex_read.reg1_value;
-  uint64_t reg2_value = id_ex_read.reg2_value;
-  uint64_t reg3_value = registers_.ReadFpr(rs3); // no hazard detection for r3, directly reading it from register file
+  uint64_t reg1_value = registers_.ReadFpr(rs1);
+  uint64_t reg2_value = registers_.ReadFpr(rs2);
+  uint64_t reg3_value = registers_.ReadFpr(rs3);
 
-  if (funct7==0b1101000 || funct7==0b1111000 || opcode==0b0000111 || opcode==0b0100111) { // in this case rs1 if from GPR and rs2 from FPR
-    // reg1_value = registers_.ReadGpr(rs1); // we are directly reading from register file
+  if (funct7==0b1101000 || funct7==0b1111000 || opcode==0b0000111 || opcode==0b0100111) {
+    reg1_value = registers_.ReadGpr(rs1);
   }
 
   if (control_unit_.GetAluSrc()) {
     reg2_value = static_cast<uint64_t>(static_cast<int64_t>(imm));
   }
 
-  
-  alu::AluOp aluOperation = control_unit_.GetAluSignal(current_instruction, id_ex_read.alu_op_);
+  alu::AluOp aluOperation = control_unit_.GetAluSignal(current_instruction_, control_unit_.GetAluOp());
   std::tie(execution_result_, fcsr_status) = alu::Alu::fpexecute(aluOperation, reg1_value, reg2_value, reg3_value, rm);
-  
-  std::cout<< "PC =====> "<< id_ex_read.pc <<std::endl;
-  std::cerr << "ALU Operation: " << aluOperation <<" "<<reg1_value<<" "<<reg2_value<< std::endl;
-  std::cout<<execution_result_<<std::endl;
 
+  // std::cout << "+++++ Float execution result: " << execution_result_ << std::endl;
 
-  // std::cout<<aluOperation<<std::endl;
-  // std::cout<<reg1_value<<" "<<reg2_value<<" "<<reg3_value<<std::endl;
-  // std::cout << "execution result: " << execution_result_ << std::endl;
-
-  // a
-  // adding new data to intermediate register
-  ex_mem_write.alu_result = execution_result_;
-  ex_mem_write.branch_taken = branch_flag_;
-  ex_mem_write.next_pc = return_address_;
-  
-
-  // a set the signal to default after using it
-  branch_flag_ = false;
-
-  // std::cout<<"hello"<<ex_mem_register.alu_result<<std::endl;
-
-  // forwarding the current values from the intermediate registers
-  ex_mem_write.pc = id_ex_read.pc;
-  ex_mem_write.instruction = id_ex_read.instruction;
-  ex_mem_write.rd_num = id_ex_read.rd_num;
-  ex_mem_write.reg2_value = id_ex_read.reg2_value;
-  ex_mem_write.reg_write = id_ex_read.reg_write;
-  ex_mem_write.mem_read = id_ex_read.mem_read;
-  ex_mem_write.mem_write = id_ex_read.mem_write;
-  ex_mem_write.mem_to_reg = id_ex_read.mem_to_reg; 
-  ex_mem_write.rd_is_fpr = id_ex_read.rd_is_fpr;
-  ex_mem_write.rs1_is_fpr = id_ex_read.rs1_is_fpr;
-  ex_mem_write.rs2_is_fpr = id_ex_read.rs2_is_fpr;
 
   registers_.WriteCsr(0x003, fcsr_status);
 }
@@ -686,25 +608,19 @@ void RVSSVM::WriteMemory() {
   mem_wb_write.memory_read_data = memory_result_;
 
   // forwarding the data from ex_mem_register to mem_wb_register
-  mem_wb_write.pc = ex_mem_read.pc;
   mem_wb_write.next_pc = ex_mem_read.next_pc;
   mem_wb_write.alu_result = ex_mem_read.alu_result;
   mem_wb_write.instruction = ex_mem_read.instruction;
   mem_wb_write.rd_num = ex_mem_read.rd_num;
   mem_wb_write.reg_write = ex_mem_read.reg_write;
   mem_wb_write.mem_to_reg = ex_mem_read.mem_to_reg;
-  mem_wb_write.rd_is_fpr = ex_mem_read.rd_is_fpr;
-  mem_wb_write.rs1_is_fpr = ex_mem_read.rs1_is_fpr;
-  mem_wb_write.rs2_is_fpr = ex_mem_read.rs2_is_fpr;
 }
 
 void RVSSVM::WriteMemoryFloat() {
-  // std::cout<<"write memory float"<<std::endl;
-  uint64_t current_instruction = ex_mem_read.instruction;
-  uint8_t rs2 = (current_instruction >> 20) & 0b11111;
+  uint8_t rs2 = (current_instruction_ >> 20) & 0b11111;
 
-  if (ex_mem_read.mem_read) { // FLW
-    memory_result_ = memory_controller_.ReadWord(ex_mem_read.alu_result);
+  if (control_unit_.GetMemRead()) { // FLW
+    memory_result_ = memory_controller_.ReadWord(execution_result_);
   }
 
   // std::cout << "+++++ Memory result: " << memory_result_ << std::endl;
@@ -713,13 +629,13 @@ void RVSSVM::WriteMemoryFloat() {
   std::vector<uint8_t> old_bytes_vec;
   std::vector<uint8_t> new_bytes_vec;
 
-  if (ex_mem_read.mem_write) { // FSW
-    addr = ex_mem_read.alu_result;
+  if (control_unit_.GetMemWrite()) { // FSW
+    addr = execution_result_;
     for (size_t i = 0; i < 4; ++i) {
       old_bytes_vec.push_back(memory_controller_.ReadByte(addr + i));
     }
-    uint32_t val = ex_mem_read.reg2_value & 0xFFFFFFFF;
-    memory_controller_.WriteWord(ex_mem_read.alu_result, val);
+    uint32_t val = registers_.ReadFpr(rs2) & 0xFFFFFFFF;
+    memory_controller_.WriteWord(execution_result_, val);
     // new_bytes_vec.push_back(memory_controller_.ReadByte(addr));
     for (size_t i = 0; i < 4; ++i) {
       new_bytes_vec.push_back(memory_controller_.ReadByte(addr + i));
@@ -729,21 +645,6 @@ void RVSSVM::WriteMemoryFloat() {
   if (old_bytes_vec!=new_bytes_vec) {
     current_delta_.memory_changes.push_back({addr, old_bytes_vec, new_bytes_vec});
   }
-
-  // adding new data to mem_wb_register
-  mem_wb_write.memory_read_data = memory_result_;
-
-  // forwarding the data from ex_mem_register to mem_wb_register
-  mem_wb_write.pc = ex_mem_read.pc;
-  mem_wb_write.next_pc = ex_mem_read.next_pc;
-  mem_wb_write.alu_result = ex_mem_read.alu_result;
-  mem_wb_write.instruction = ex_mem_read.instruction;
-  mem_wb_write.rd_num = ex_mem_read.rd_num;
-  mem_wb_write.reg_write = ex_mem_read.reg_write;
-  mem_wb_write.mem_to_reg = ex_mem_read.mem_to_reg;
-  mem_wb_write.rd_is_fpr = ex_mem_read.rd_is_fpr;
-  mem_wb_write.rs1_is_fpr = ex_mem_read.rs1_is_fpr;
-  mem_wb_write.rs2_is_fpr = ex_mem_read.rs2_is_fpr;
 }
 
 void RVSSVM::WriteMemoryDouble() {
@@ -823,7 +724,7 @@ void RVSSVM::WriteBack() {
         break;
       }
       case get_instr_encoding(Instruction::klui).opcode: /* LUI */ {
-        registers_.WriteGpr(mem_wb_read.rd_num, mem_wb_read.alu_result); // no need of shifing 12 bits here as we have already done it
+        registers_.WriteGpr(mem_wb_read.rd_num, (imm << 12));
         break;
       }
       default: break;
@@ -846,18 +747,16 @@ void RVSSVM::WriteBack() {
 }
 
 void RVSSVM::WriteBackFloat() {
-  // std::cout<<"write back float"<<std::endl;
-  uint64_t current_instruction = mem_wb_read.instruction;
-  uint8_t opcode = current_instruction & 0b1111111;
-  uint8_t funct7 = (current_instruction >> 25) & 0b1111111;
-  uint8_t rd = (current_instruction >> 7) & 0b11111;
+  uint8_t opcode = current_instruction_ & 0b1111111;
+  uint8_t funct7 = (current_instruction_ >> 25) & 0b1111111;
+  uint8_t rd = (current_instruction_ >> 7) & 0b11111;
 
   uint64_t old_reg = 0;
   unsigned int reg_index = rd;
   unsigned int reg_type = 2; // 0 for GPR, 1 for CSR, 2 for FPR
   uint64_t new_reg = 0;
 
-  if (mem_wb_read.reg_write) {
+  if (control_unit_.GetRegWrite()) {
     switch(funct7) {
       // write to GPR
       case get_instr_encoding(Instruction::kfle_s).funct7: // f(eq|lt|le).s
@@ -865,8 +764,8 @@ void RVSSVM::WriteBackFloat() {
       case get_instr_encoding(Instruction::kfmv_x_w).funct7: // fmv.x.w , fclass.s
       {
         old_reg = registers_.ReadGpr(rd);
-        registers_.WriteGpr(rd, mem_wb_read.alu_result);
-        new_reg = mem_wb_read.alu_result;
+        registers_.WriteGpr(rd, execution_result_);
+        new_reg = execution_result_;
         reg_type = 0; // GPR
         break;
       }
@@ -876,16 +775,16 @@ void RVSSVM::WriteBackFloat() {
         switch (opcode) {
           case get_instr_encoding(Instruction::kflw).opcode: {
             old_reg = registers_.ReadFpr(rd);
-            registers_.WriteFpr(rd, mem_wb_read.memory_read_data);
-            new_reg = mem_wb_read.memory_read_data;
+            registers_.WriteFpr(rd, memory_result_);
+            new_reg = memory_result_;
             reg_type = 2; // FPR
             break;
           }
 
           default: {
             old_reg = registers_.ReadFpr(rd);
-            registers_.WriteFpr(rd, mem_wb_read.alu_result);
-            new_reg = mem_wb_read.alu_result;
+            registers_.WriteFpr(rd, execution_result_);
+            new_reg = execution_result_;
             reg_type = 2; // FPR
             break;
           }
@@ -1016,39 +915,36 @@ void RVSSVM::WriteBackCsr() {
 void RVSSVM::HazardDetectionUnit(){
 
   // setting all local control signals to false 
-  stall = forward_from_ex_mem = forward_from_mem_wb = load_use_hazard = jal_jalr_hazard = false; 
+  stall = forward_from_ex_mem = forward_from_mem_wb = load_use_hazard = false; 
+
 
   // check for control hazard
   if(ex_mem_write.branch_taken){
     std::cout<<"branch taken"<<std::endl;
     // if branch is taken then we have to flush only second stage 
     // and run next iteration from new PC
-    
+
     // if_id_write = {}; // we dont need this as the instruction fetched after running the excute stage 
     // will be from the taken branch so its correct instruction, no need to flush it
-    
-    // UpdateProgramCounter(-4);
-    stall = true;
+
     id_ex_write = {};
     ex_mem_write.branch_taken = false;
     return;
   }
 
-  // implement differencing b/w GPR and FPR
 
   // check for hazards and change control signals accordingly
   if(ex_mem_write.reg_write && ex_mem_write.rd_num != 0
-    && ((id_ex_write.rs1_num == ex_mem_write.rd_num && id_ex_write.rs1_is_fpr == ex_mem_write.rd_is_fpr) 
-      || (id_ex_write.rs2_num == ex_mem_write.rd_num && id_ex_write.rs2_is_fpr == ex_mem_write.rd_is_fpr))){
+    && (id_ex_write.rs1_num == ex_mem_write.rd_num || id_ex_write.rs2_num == ex_mem_write.rd_num)){
     
     // stall = true;
     
     if(ex_mem_write.mem_read){ // its a load instruction, we must add NOP
       // adding NOP
-      // UpdateProgramCounter(-4);
+      UpdateProgramCounter(-4);
       if_id_write.pc = id_ex_write.pc;
       if_id_write.instruction = id_ex_write.instruction;
-      stall = true;
+
       id_ex_write = {};
       return;
     }
@@ -1058,8 +954,7 @@ void RVSSVM::HazardDetectionUnit(){
   } 
 
   if(mem_wb_write.reg_write && mem_wb_write.rd_num != 0
-    && ((id_ex_write.rs1_num == mem_wb_write.rd_num && id_ex_write.rs1_is_fpr == mem_wb_write.rd_is_fpr) 
-      || (id_ex_write.rs2_num == mem_wb_write.rd_num && id_ex_write.rs2_is_fpr == mem_wb_write.rd_is_fpr))){
+    && (id_ex_write.rs1_num == mem_wb_write.rd_num || id_ex_write.rs2_num == mem_wb_write.rd_num)){
     // stall = true;
     if(mem_wb_write.mem_to_reg){ // its a load instruction
       // in this case we need to forward memory_read_data instead of ALU_result
@@ -1094,30 +989,15 @@ void RVSSVM::HazardDetectionUnit(){
 
 void RVSSVM::CorrectionUnit(){
 
-
-  if(forward_from_mem_wb){ // forwarding alu result
-    uint8_t opcode = (mem_wb_write.instruction & 0b1111111);
-    if((opcode == 0b1101111 || opcode == 0b1100111)){
-      jal_jalr_hazard = true;
+  if(forward_from_ex_mem){
+    if(id_ex_write.rs1_num == ex_mem_write.rd_num){
+      id_ex_write.reg1_value = ex_mem_write.alu_result;
     }
-    if(id_ex_write.rs1_num == mem_wb_write.rd_num){
-      if(jal_jalr_hazard){
-        id_ex_write.reg1_value = mem_wb_write.next_pc;
-      }
-      else{
-        id_ex_write.reg1_value = mem_wb_write.alu_result;
-      }
+    if(id_ex_write.rs2_num == ex_mem_write.rd_num){
+      id_ex_write.reg2_value = ex_mem_write.alu_result;
     }
-    if(id_ex_write.rs2_num == mem_wb_write.rd_num){
-      if(jal_jalr_hazard){
-        id_ex_write.reg2_value = mem_wb_write.next_pc;
-      }
-      else{
-        id_ex_write.reg2_value = mem_wb_write.alu_result;
-      }
-    }
-    jal_jalr_hazard = false;
   }
+  
   if(load_use_hazard){ // forwarding mem_read_data
     if(id_ex_write.rs1_num == mem_wb_write.rd_num){
       id_ex_write.reg1_value = mem_wb_write.memory_read_data;
@@ -1126,28 +1006,13 @@ void RVSSVM::CorrectionUnit(){
       id_ex_write.reg2_value = mem_wb_write.memory_read_data;
     }
   }
-  if(forward_from_ex_mem){
-    uint8_t opcode = (ex_mem_write.instruction & 0b1111111);
-    if((opcode == 0b1101111 || opcode == 0b1100111)){
-      jal_jalr_hazard = true;
+  if(forward_from_mem_wb){ // forwarding alu result
+    if(id_ex_write.rs1_num == mem_wb_write.rd_num){
+      id_ex_write.reg1_value = mem_wb_write.alu_result;
     }
-    if(id_ex_write.rs1_num == ex_mem_write.rd_num){
-      if(jal_jalr_hazard){
-        id_ex_write.reg1_value = ex_mem_write.next_pc;
-      }
-      else{
-        id_ex_write.reg1_value = ex_mem_write.alu_result;
-      }
+    if(id_ex_write.rs2_num == mem_wb_write.rd_num){
+      id_ex_write.reg2_value = mem_wb_write.alu_result;
     }
-    if(id_ex_write.rs2_num == ex_mem_write.rd_num){
-      if(jal_jalr_hazard){
-        id_ex_write.reg2_value = ex_mem_write.next_pc;
-      }
-      else{
-        id_ex_write.reg2_value = ex_mem_write.alu_result;
-      }
-    }
-    jal_jalr_hazard = false;
   }
 
   stall = false;
@@ -1156,87 +1021,13 @@ void RVSSVM::CorrectionUnit(){
 
 
 
-// void RVSSVM::Run() {
-//   ClearStop();
-//   uint64_t instruction_executed = 0;
-
-//   // A new variable to track if the pipeline is draining
-//   bool draining = false;
-//   int drain_cycles = 5; // Your pipeline depth
-
-//   // Loop condition must change
-//   while (!stop_requested_) {
-//     if (instruction_executed > vm_config::config.getInstructionExecutionLimit())
-//       break;
-
-//     // Check if fetch has hit the end
-//     if (program_counter_ >= program_size_) {
-//         draining = true;
-//     }
-
-//     WriteBack();
-//     WriteMemory();
-//     Execute();
-//     Decode();
-//     Fetch(); 
-    
-//     // ... Hazard/Correction units ...
-    
-//     if(!stall){
-//       if_id_read = if_id_write;
-//       id_ex_read = id_ex_write;
-//     }
-//     ex_mem_read = ex_mem_write;
-//     mem_wb_read = mem_wb_write;
-
-//     if(!stall){
-//       instructions_retired_++;
-//       instruction_executed++;
-//     }
-//     cycle_s_++;
-//     std::cout << "Program Counter: " << program_counter_ << std::endl;
-
-//     // If we are draining, count down cycles and then exit
-//     if (draining) {
-//         drain_cycles--;
-//         if (drain_cycles <= 0) {
-//             break; // Exit the loop
-//         }
-//     }
-//   }
-
-//   // ... rest of the function ...
-//   // printing the register values
-//   std::cout<<"--------- GPR register ---------"<<std::endl;
-//   for(int i=0;i<32;i++) std::cout<<static_cast<int>(registers_.ReadGpr(i))<<" ";
-//   std::cout<<std::endl;
-//   std::cout<<"--------- FPR register ---------"<<std::endl;
-//   for(int i=0;i<32;i++){
-//     // std::cout<<static_cast<double>(registers_.ReadFpr(i))<<" ";
-//     uint32_t bits = registers_.ReadFpr(i);
-//     float value = *reinterpret_cast<float*>(&bits);
-//     std::cout << value << " ";
-//   }
-//   std::cout<<std::endl;
-
-//   if (program_counter_ >= program_size_) {
-//     std::cout << "VM_PROGRAM_END" << std::endl;
-//     output_status_ = "VM_PROGRAM_END";
-//   }
-//   DumpRegisters(globals::registers_dump_file_path, registers_);
-//   DumpState(globals::vm_state_dump_file_path);
-// }
-
-
 void RVSSVM::Run() {
   ClearStop();
   uint64_t instruction_executed = 0;
 
-  while (!stop_requested_ && program_counter_ < program_size_ + 8) {
-    if (instruction_executed > vm_config::config.getInstructionExecutionLimit()){
-      std::cout<<"Breaking Out"<<std::endl;
+  while (!stop_requested_ && program_counter_ < program_size_) {
+    if (instruction_executed > vm_config::config.getInstructionExecutionLimit())
       break;
-    }
 
     // reversing the execution of stages
     WriteBack();
@@ -1254,44 +1045,24 @@ void RVSSVM::Run() {
     HazardDetectionUnit();
     CorrectionUnit();
 
-    // std::cout << "Program Counter: " << mem_wb_read.pc << std::endl;
-    // std::cout << "Program Counter: " << ex_mem_write.pc << std::endl;
-    // std::cout << "Program Counter: " << program_counter_-12 << std::endl;
-
     // moving the data forward
-    // if(!stall){
-    //   if_id_read = if_id_write;
-    //   id_ex_read = id_ex_write;
-    // }
-    // ex_mem_read = ex_mem_write;
-    // mem_wb_read = mem_wb_write;
-
-    if_id_read = if_id_write;
-    id_ex_read = id_ex_write;
+    if(!stall){
+      if_id_read = if_id_write;
+      id_ex_read = id_ex_write;
+    }
     ex_mem_read = ex_mem_write;
     mem_wb_read = mem_wb_write;
 
-    instructions_retired_++;
-    instruction_executed++;
-
-    // if(!stall){
-    //   instructions_retired_++;
-    //   instruction_executed++;
-    // }
+    if(!stall){
+      instructions_retired_++;
+      instruction_executed++;
+    }
     cycle_s_++;
+    std::cout << "Program Counter: " << program_counter_ << std::endl;
   }
 
   // printing the register values
-  std::cout<<"--------- GPR register ---------"<<std::endl;
   for(int i=0;i<32;i++) std::cout<<static_cast<int>(registers_.ReadGpr(i))<<" ";
-  std::cout<<std::endl;
-  std::cout<<"--------- FPR register ---------"<<std::endl;
-  for(int i=0;i<32;i++){
-    // std::cout<<static_cast<double>(registers_.ReadFpr(i))<<" ";
-    uint32_t bits = registers_.ReadFpr(i);
-    float value = *reinterpret_cast<float*>(&bits);
-    std::cout << value << " ";
-  }
   std::cout<<std::endl;
 
   if (program_counter_ >= program_size_) {
@@ -1530,7 +1301,3 @@ void RVSSVM::Reset() {
   redo_stack_ = std::stack<StepDelta>();
 
 }
-
-
-
-

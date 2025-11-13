@@ -35,3 +35,16 @@ uint8_t ControlUnit::GetAluOp() const {
 bool ControlUnit::GetBranch() const {
   return branch_;
 }
+
+// a
+bool ControlUnit::GetRs1IsFpr() const{
+  return rs1_is_fpr;
+}
+
+bool ControlUnit::GetRs2IsFpr() const{
+  return rs2_is_fpr;
+}
+
+bool ControlUnit::GetRdIsFpr() const{
+  return rd_is_fpr;
+}

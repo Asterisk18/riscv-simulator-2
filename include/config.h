@@ -33,7 +33,7 @@ struct VmConfig {
   uint64_t text_section_start = 0x0; // Default start address for text section
   uint64_t bss_section_start = 0x11000000; // Default start address for BSS section
 
-  uint64_t instruction_execution_limit = 100;
+  uint64_t instruction_execution_limit = 10000;
 
   bool m_extension_enabled = true;
   bool f_extension_enabled = true;
