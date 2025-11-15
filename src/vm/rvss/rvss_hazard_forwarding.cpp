@@ -34,35 +34,23 @@ RVSSVM::RVSSVM() : VmBase() {
 
 RVSSVM::~RVSSVM() = default;
 
-// void RVSSVM::Fetch() {
-//   if_id_write.instruction = memory_controller_.ReadWord(program_counter_);
-//   if_id_write.pc = program_counter_;
-//   UpdateProgramCounter(4);
-// }
-
 void RVSSVM::Fetch() {
-  uint64_t current_pc = program_counter_;
-  if_id_write.instruction = memory_controller_.ReadWord(current_pc);
-  if_id_write.pc = current_pc;
-
-  // Branch Prediction Logic
-  if (branch_predictor_table_.count(current_pc)) {
-    PredictionEntry& entry = branch_predictor_table_[current_pc];
-    if (entry.taken) {
-      // Predict TAKEN
-      program_counter_ = entry.target_pc;
-      if_id_write.predicted_taken = true;
-    } else {
-      // Predict NOT TAKEN
-      UpdateProgramCounter(4);
-      if_id_write.predicted_taken = false;
-    }
-  } else {
-    // Not in table, default to NOT TAKEN
-    UpdateProgramCounter(4);
-    if_id_write.predicted_taken = false;
-  }
+  if_id_write.instruction = memory_controller_.ReadWord(program_counter_);
+  if_id_write.pc = program_counter_;
+  UpdateProgramCounter(4);
+  
+  // if (program_counter_ >= program_size_) {
+  //   // Inject NOP (addi x0, x0, 0)
+  //   if_id_write.instruction = 0x13; 
+  //   if_id_write.pc = program_counter_;
+  //   // Don't increment PC
+  // } else {
+  //   if_id_write.instruction = memory_controller_.ReadWord(program_counter_);
+  //   if_id_write.pc = program_counter_;
+  //   UpdateProgramCounter(4);
+  // }
 }
+
 
 void RVSSVM::Decode() {
 
@@ -105,7 +93,7 @@ void RVSSVM::Decode() {
   // forwarding data
   id_ex_write.pc = if_id_read.pc;
   id_ex_write.instruction = if_id_read.instruction;
-  id_ex_write.predicted_taken = if_id_read.predicted_taken;
+  id_ex_write.pc = if_id_read.pc;
 
   id_ex_write.imm = ImmGenerator(current_instruction);
   id_ex_write.rd_num = (current_instruction >> 7) & 0b11111;
@@ -145,8 +133,8 @@ void RVSSVM::Execute() {
     ExecuteDouble();
     return;
   } else if (opcode==0b1110011) {
-    // ExecuteCsr();
-    // return;
+    ExecuteCsr();
+    return;
   }
 
   // uint8_t rs1 = (current_instruction >> 15) & 0b11111;
@@ -188,7 +176,6 @@ void RVSSVM::Execute() {
   std::cerr << "ALU Operation: " << aluOperation <<" "<<reg1_value<<" "<<reg2_value<< std::endl;
   std::cout<<execution_result_<<std::endl;
 
-
   uint64_t actual_target_pc = 0;
 
   if (id_ex_read.branch) {
@@ -205,13 +192,10 @@ void RVSSVM::Execute() {
       return_address_ = id_ex_read.pc + 4;
       if (opcode==get_instr_encoding(Instruction::kjalr).opcode) { 
         // UpdateProgramCounter(-id_ex_read.pc + (execution_result_));
-        // actual_target_pc = program_counter_;
         actual_target_pc = static_cast<uint64_t>(execution_result_);
-        // UpdateProgramCounter(+id_ex_read.pc - (execution_result_));
       } else if (opcode==get_instr_encoding(Instruction::kjal).opcode) {
         // UpdateProgramCounter(imm);
         actual_target_pc = static_cast<uint64_t>(static_cast<int64_t>(id_ex_read.pc)+imm);
-        // UpdateProgramCounter(-imm);
       }
     } else if (opcode==get_instr_encoding(Instruction::kbeq).opcode ||
                opcode==get_instr_encoding(Instruction::kbne).opcode ||
@@ -254,9 +238,9 @@ void RVSSVM::Execute() {
     // a -> changed it to -8
     // UpdateProgramCounter(-8);
     // UpdateProgramCounter(imm);
-    actual_target_pc = static_cast<uint64_t>(static_cast<int64_t>(id_ex_read.pc) + imm);
+    actual_target_pc = static_cast<uint64_t>(static_cast<int64_t>(id_ex_read.pc) + imm); 
     // a
-    // ex_mem_write.branch_target_pc = program_counter_;
+    ex_mem_write.branch_target_pc = program_counter_;
   }
 
 
@@ -264,19 +248,13 @@ void RVSSVM::Execute() {
     execution_result_ = static_cast<int64_t>(program_counter_) - 4 + (imm << 12);
   }
 
-
-  // implementing the correction unit in hazard detection
-  ex_mem_write.actual_taken = branch_flag_;
-  ex_mem_write.actual_target_pc = actual_target_pc;
-  ex_mem_write.is_branch = id_ex_read.branch;
-  ex_mem_write.predicted_taken = id_ex_read.predicted_taken;
-
   // a
   // adding new data to intermediate register
   ex_mem_write.alu_result = execution_result_;
   ex_mem_write.branch_taken = branch_flag_;
   ex_mem_write.next_pc = return_address_;
-  
+  ex_mem_write.branch_target_pc = actual_target_pc;
+  ex_mem_write.is_branch = id_ex_read.branch;
 
   // a set the signal to default after using it
   branch_flag_ = false;
@@ -344,10 +322,6 @@ void RVSSVM::ExecuteFloat() {
   // std::cout << "execution result: " << execution_result_ << std::endl;
 
   // a
-  // implementing the correction unit in hazard detection
-  ex_mem_write.is_branch = id_ex_read.branch;
-  ex_mem_write.predicted_taken = id_ex_read.predicted_taken;
-
   // adding new data to intermediate register
   ex_mem_write.alu_result = execution_result_;
   ex_mem_write.branch_taken = branch_flag_;
@@ -376,7 +350,6 @@ void RVSSVM::ExecuteFloat() {
 }
 
 void RVSSVM::ExecuteDouble() {
-  
   // std::cout<<"executing float"<<std::endl;
   uint64_t current_instruction = id_ex_read.instruction;
   uint8_t opcode = current_instruction & 0b1111111;
@@ -447,6 +420,17 @@ void RVSSVM::ExecuteDouble() {
   ex_mem_write.rs2_is_fpr = id_ex_read.rs2_is_fpr;
 
   registers_.WriteCsr(0x003, fcsr_status);
+}
+
+void RVSSVM::ExecuteCsr() {
+  uint8_t rs1 = (current_instruction_ >> 15) & 0b11111;
+  uint16_t csr = (current_instruction_ >> 20) & 0xFFF;
+  uint64_t csr_val = registers_.ReadCsr(csr);
+
+  csr_target_address_ = csr;
+  csr_old_value_ = csr_val;
+  csr_write_val_ = registers_.ReadGpr(rs1);
+  csr_uimm_ = rs1;
 }
 
 // for the current implementation syscall READ and WRITE may have data hazard in its implementation, 
@@ -813,7 +797,6 @@ void RVSSVM::WriteMemoryFloat() {
 }
 
 void RVSSVM::WriteMemoryDouble() {
-  
   // std::cout<<"write memory float"<<std::endl;
   uint64_t current_instruction = ex_mem_read.instruction;
   uint8_t rs2 = (current_instruction >> 20) & 0b11111;
@@ -1012,7 +995,6 @@ void RVSSVM::WriteBackFloat() {
 
 void RVSSVM::WriteBackDouble() {
   
-  
   // std::cout<<"write back float"<<std::endl;
   uint64_t current_instruction = mem_wb_read.instruction;
   uint8_t opcode = current_instruction & 0b1111111;
@@ -1146,50 +1128,27 @@ void RVSSVM::HazardDetectionUnit(){
 
   // check for control hazard
   if(ex_mem_write.is_branch){
-    if(ex_mem_write.actual_taken == ex_mem_write.predicted_taken){
-      std::cout<<"Right Prediction"<<std::endl;
-      // prediction is correct
-      // return;
+    std::cout<<"branch taken"<<std::endl;
+    // if branch is taken then we have to flush only second stage 
+    // and run next iteration from new PC
+    
+    // if_id_write = {}; // we dont need this as the instruction fetched after running the excute stage 
+    // will be from the taken branch so its correct instruction, no need to flush it
+    
+    // UpdateProgramCounter(-4);
+    if(ex_mem_write.branch_taken){
+      program_counter_ = ex_mem_write.branch_target_pc;
     }
     else{
-      // our prediction is wrong
-      std::cout<<"Wrong Prediction"<<std::endl;
-
-      // PredictionEntry& entry = branch_predictor_table_[ex_mem_write.pc];
-      // entry.taken = ex_mem_write.actual_taken;
-      // if (ex_mem_write.actual_taken) {
-      //   entry.target_pc = ex_mem_read.actual_target_pc; // Store the target
-      // }
-
-      id_ex_write = {};
-      if_id_write = {};
-
-      if(ex_mem_write.actual_taken){
-        program_counter_ = ex_mem_write.actual_target_pc;
-      }
-      else{
-        program_counter_ = ex_mem_write.pc+4;
-      }
+      program_counter_ = ex_mem_write.pc + 4;
     }
+    // stall = true;
+    if_id_write = {};
+    id_ex_write = {};
     ex_mem_write.branch_taken = false;
-    branch_predictor_table_[ex_mem_write.pc] = {ex_mem_write.actual_taken, ex_mem_write.actual_target_pc};
-    // ex_mem_write.is_branch = false;
+
     // return;
   }
-  // if(ex_mem_write.branch_taken){
-  //   std::cout<<"branch taken"<<std::endl;
-  //   // if branch is taken then we have to flush only second stage 
-  //   // and run next iteration from new PC
-    
-  //   // if_id_write = {}; // we dont need this as the instruction fetched after running the excute stage 
-  //   // will be from the taken branch so its correct instruction, no need to flush it
-    
-  //   // UpdateProgramCounter(-4);
-  //   stall = true;
-  //   id_ex_write = {};
-  //   ex_mem_write.branch_taken = false;
-  //   return;
-  // }
 
   // implement differencing b/w GPR and FPR
 
@@ -1205,7 +1164,7 @@ void RVSSVM::HazardDetectionUnit(){
       // UpdateProgramCounter(-4);
       if_id_write.pc = id_ex_write.pc;
       if_id_write.instruction = id_ex_write.instruction;
-      stall = true;
+      // stall = true;
       id_ex_write = {};
       return;
     }
@@ -1250,6 +1209,7 @@ void RVSSVM::HazardDetectionUnit(){
 
 
 void RVSSVM::CorrectionUnit(){
+
 
   if(forward_from_mem_wb){ // forwarding alu result
     uint8_t opcode = (mem_wb_write.instruction & 0b1111111);
@@ -1447,7 +1407,7 @@ void RVSSVM::Run() {
   std::cout<<"--------- GPR register ---------"<<std::endl;
   for(int i=0;i<32;i++) std::cout<<static_cast<int>(registers_.ReadGpr(i))<<" ";
   std::cout<<std::endl;
-  std::cout<<"--------- FPR register ---------"<<std::endl;
+  std::cout<<"--------- FPR register (float)---------"<<std::endl;
   for(int i=0;i<32;i++){
     // std::cout<<static_cast<double>(registers_.ReadFpr(i))<<" ";
     uint32_t bits = registers_.ReadFpr(i);

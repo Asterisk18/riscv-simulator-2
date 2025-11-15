@@ -120,22 +120,56 @@ void RVSSControlUnit::SetControlSignals(uint32_t instruction) {
     //   break;
     // }
 
-    case 0b1010011: {// F-Type R-type instructions, where one register is GPR and one is FPR
+    // case 0b1010011: {// F-Type R-type instructions, where one register is GPR and one is FPR
+    //   reg_write_ = true;
+    //   alu_op_ = true;
+      
+    //   uint8_t funct7 = (instruction >> 25) & 0b1111111;
+
+    //   rs1_is_fpr = true;
+    //   rs2_is_fpr = true; 
+    //   rd_is_fpr = true;
+
+    //   if (funct7 == 0b1101000 || funct7 == 0b1111000) { // fcvt.s.w (Int to Float), fmv.w.x (Move Int to Float)
+    //      rs1_is_fpr = false; // reading value from GPR
+    //      rs2_is_fpr = false; 
+    //   }
+      
+    //   if (funct7 == 0b1100000 || funct7 == 0b1110000 || funct7 == 0b1010000) { // fcvt.w.s (Float to Int), fmv.x.w (Move Float to Int)
+    //      rd_is_fpr = false; // Write to GPR
+    //   }
+    //   break;
+    // }
+
+    case 0b1010011: {// F-Type and D-Type R-type instructions
       reg_write_ = true;
       alu_op_ = true;
       
       uint8_t funct7 = (instruction >> 25) & 0b1111111;
 
+      // Default to all FPRs
       rs1_is_fpr = true;
       rs2_is_fpr = true; 
       rd_is_fpr = true;
 
-      if (funct7 == 0b1101000 || funct7 == 0b1111000) { // fcvt.s.w (Int to Float), fmv.w.x (Move Int to Float)
-         rs1_is_fpr = false; // reading value from GPR
-         rs2_is_fpr = false; 
+      // Check for Int-to-Float (read GPR, write FPR)
+      if (funct7 == 0b1101000 || // FCVT.S.W/L
+          funct7 == 0b1101001 || // FCVT.D.W/L
+          funct7 == 0b1111000 || // FMV.W.X
+          funct7 == 0b1111001)   // FMV.D.X
+      {
+         rs1_is_fpr = false; // rs1 is GPR
+         rs2_is_fpr = false; // Not used
       }
       
-      if (funct7 == 0b1100000 || funct7 == 0b1110000 || funct7 == 0b1010000) { // fcvt.w.s (Float to Int), fmv.x.w (Move Float to Int)
+      // Check for Float-to-Int (read FPR, write GPR)
+      if (funct7 == 0b1100000 || // FCVT.W/L.S
+          funct7 == 0b1100001 || // FCVT.W/L.D
+          funct7 == 0b1110000 || // FMV.X.W, FCLASS.S
+          funct7 == 0b1110001 || // FMV.X.D, FCLASS.D
+          funct7 == 0b1010000 || // FEQ/FLT/FLE.S
+          funct7 == 0b1010001)   // FEQ/FLT/FLE.D
+      {
          rd_is_fpr = false; // Write to GPR
       }
       break;
