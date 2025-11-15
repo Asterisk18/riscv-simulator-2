@@ -1037,7 +1037,7 @@ void RVSSVM::HazardDetectionUnit(){
   // implement differencing b/w GPR and FPR
 
   // check for hazards and change control signals accordingly
-  if(ex_mem_write.reg_write && ex_mem_write.rd_num != 0
+  if(ex_mem_write.reg_write && ((!ex_mem_write.rd_is_fpr && ex_mem_write.rd_num != 0) || ex_mem_write.rd_is_fpr)
     && ((id_ex_write.rs1_num == ex_mem_write.rd_num && id_ex_write.rs1_is_fpr == ex_mem_write.rd_is_fpr) 
       || (id_ex_write.rs2_num == ex_mem_write.rd_num && id_ex_write.rs2_is_fpr == ex_mem_write.rd_is_fpr))){
     
@@ -1057,7 +1057,7 @@ void RVSSVM::HazardDetectionUnit(){
     }
   } 
 
-  if(mem_wb_write.reg_write && mem_wb_write.rd_num != 0
+  if(mem_wb_write.reg_write && ((!mem_wb_write.rd_is_fpr && mem_wb_write.rd_num != 0) || (mem_wb_write.rd_is_fpr))
     && ((id_ex_write.rs1_num == mem_wb_write.rd_num && id_ex_write.rs1_is_fpr == mem_wb_write.rd_is_fpr) 
       || (id_ex_write.rs2_num == mem_wb_write.rd_num && id_ex_write.rs2_is_fpr == mem_wb_write.rd_is_fpr))){
     // stall = true;
@@ -1100,7 +1100,8 @@ void RVSSVM::CorrectionUnit(){
     if((opcode == 0b1101111 || opcode == 0b1100111)){
       jal_jalr_hazard = true;
     }
-    if(id_ex_write.rs1_num == mem_wb_write.rd_num){
+    if(id_ex_write.rs1_num == mem_wb_write.rd_num 
+      && id_ex_write.rs1_is_fpr == mem_wb_write.rd_is_fpr){
       if(jal_jalr_hazard){
         id_ex_write.reg1_value = mem_wb_write.next_pc;
       }
@@ -1108,7 +1109,8 @@ void RVSSVM::CorrectionUnit(){
         id_ex_write.reg1_value = mem_wb_write.alu_result;
       }
     }
-    if(id_ex_write.rs2_num == mem_wb_write.rd_num){
+    if(id_ex_write.rs2_num == mem_wb_write.rd_num 
+      && id_ex_write.rs2_is_fpr == mem_wb_write.rd_is_fpr){
       if(jal_jalr_hazard){
         id_ex_write.reg2_value = mem_wb_write.next_pc;
       }
@@ -1119,10 +1121,12 @@ void RVSSVM::CorrectionUnit(){
     jal_jalr_hazard = false;
   }
   if(load_use_hazard){ // forwarding mem_read_data
-    if(id_ex_write.rs1_num == mem_wb_write.rd_num){
+    if(id_ex_write.rs1_num == mem_wb_write.rd_num 
+      && id_ex_write.rs1_is_fpr == mem_wb_write.rd_is_fpr){
       id_ex_write.reg1_value = mem_wb_write.memory_read_data;
     }
-    if(id_ex_write.rs2_num == mem_wb_write.rd_num){
+    if(id_ex_write.rs2_num == mem_wb_write.rd_num 
+      && id_ex_write.rs2_is_fpr == mem_wb_write.rd_is_fpr){
       id_ex_write.reg2_value = mem_wb_write.memory_read_data;
     }
   }
@@ -1131,7 +1135,8 @@ void RVSSVM::CorrectionUnit(){
     if((opcode == 0b1101111 || opcode == 0b1100111)){
       jal_jalr_hazard = true;
     }
-    if(id_ex_write.rs1_num == ex_mem_write.rd_num){
+    if(id_ex_write.rs1_num == ex_mem_write.rd_num 
+      && id_ex_write.rs1_is_fpr == ex_mem_write.rd_is_fpr){
       if(jal_jalr_hazard){
         id_ex_write.reg1_value = ex_mem_write.next_pc;
       }
@@ -1139,7 +1144,8 @@ void RVSSVM::CorrectionUnit(){
         id_ex_write.reg1_value = ex_mem_write.alu_result;
       }
     }
-    if(id_ex_write.rs2_num == ex_mem_write.rd_num){
+    if(id_ex_write.rs2_num == ex_mem_write.rd_num 
+      && id_ex_write.rs2_is_fpr == ex_mem_write.rd_is_fpr){
       if(jal_jalr_hazard){
         id_ex_write.reg2_value = ex_mem_write.next_pc;
       }

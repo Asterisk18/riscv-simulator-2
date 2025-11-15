@@ -34,23 +34,35 @@ RVSSVM::RVSSVM() : VmBase() {
 
 RVSSVM::~RVSSVM() = default;
 
-void RVSSVM::Fetch() {
-  if_id_write.instruction = memory_controller_.ReadWord(program_counter_);
-  if_id_write.pc = program_counter_;
-  UpdateProgramCounter(4);
-  
-  // if (program_counter_ >= program_size_) {
-  //   // Inject NOP (addi x0, x0, 0)
-  //   if_id_write.instruction = 0x13; 
-  //   if_id_write.pc = program_counter_;
-  //   // Don't increment PC
-  // } else {
-  //   if_id_write.instruction = memory_controller_.ReadWord(program_counter_);
-  //   if_id_write.pc = program_counter_;
-  //   UpdateProgramCounter(4);
-  // }
-}
+// void RVSSVM::Fetch() {
+//   if_id_write.instruction = memory_controller_.ReadWord(program_counter_);
+//   if_id_write.pc = program_counter_;
+//   UpdateProgramCounter(4);
+// }
 
+void RVSSVM::Fetch() {
+  uint64_t current_pc = program_counter_;
+  if_id_write.instruction = memory_controller_.ReadWord(current_pc);
+  if_id_write.pc = current_pc;
+
+  // Branch Prediction Logic
+  if (branch_predictor_table_.count(current_pc)) {
+    PredictionEntry& entry = branch_predictor_table_[current_pc];
+    if (entry.taken) {
+      // Predict TAKEN
+      program_counter_ = entry.target_pc;
+      if_id_write.predicted_taken = true;
+    } else {
+      // Predict NOT TAKEN
+      UpdateProgramCounter(4);
+      if_id_write.predicted_taken = false;
+    }
+  } else {
+    // Not in table, default to NOT TAKEN
+    UpdateProgramCounter(4);
+    if_id_write.predicted_taken = false;
+  }
+}
 
 void RVSSVM::Decode() {
 
@@ -93,7 +105,7 @@ void RVSSVM::Decode() {
   // forwarding data
   id_ex_write.pc = if_id_read.pc;
   id_ex_write.instruction = if_id_read.instruction;
-  id_ex_write.pc = if_id_read.pc;
+  id_ex_write.predicted_taken = if_id_read.predicted_taken;
 
   id_ex_write.imm = ImmGenerator(current_instruction);
   id_ex_write.rd_num = (current_instruction >> 7) & 0b11111;
@@ -176,6 +188,9 @@ void RVSSVM::Execute() {
   std::cerr << "ALU Operation: " << aluOperation <<" "<<reg1_value<<" "<<reg2_value<< std::endl;
   std::cout<<execution_result_<<std::endl;
 
+
+  uint64_t actual_target_pc = 0;
+
   if (id_ex_read.branch) {
     if (opcode==get_instr_encoding(Instruction::kjalr).opcode || 
         opcode==get_instr_encoding(Instruction::kjal).opcode) {
@@ -185,13 +200,18 @@ void RVSSVM::Execute() {
 
       // next_pc_ = static_cast<int64_t>(id_ex_read.pc+4); // next insruction is at PC+4
 
-      UpdateProgramCounter(-8); // changed it to -8 from -4, because there is one instruction fetched after Jal one, so the PC has moved twice
+      // UpdateProgramCounter(-8); // changed it to -8 from -4, because there is one instruction fetched after Jal one, so the PC has moved twice
 
       return_address_ = id_ex_read.pc + 4;
       if (opcode==get_instr_encoding(Instruction::kjalr).opcode) { 
-        UpdateProgramCounter(-id_ex_read.pc + (execution_result_));
+        // UpdateProgramCounter(-id_ex_read.pc + (execution_result_));
+        actual_target_pc = program_counter_;
+        actual_target_pc = static_cast<uint64_t>(execution_result_);
+        // UpdateProgramCounter(+id_ex_read.pc - (execution_result_));
       } else if (opcode==get_instr_encoding(Instruction::kjal).opcode) {
-        UpdateProgramCounter(imm);
+        // UpdateProgramCounter(imm);
+        actual_target_pc = static_cast<uint64_t>(static_cast<int64_t>(id_ex_read.pc)+imm);
+        // UpdateProgramCounter(-imm);
       }
     } else if (opcode==get_instr_encoding(Instruction::kbeq).opcode ||
                opcode==get_instr_encoding(Instruction::kbne).opcode ||
@@ -232,16 +252,24 @@ void RVSSVM::Execute() {
   if (branch_flag_ && opcode==0b1100011) {
 
     // a -> changed it to -8
-    UpdateProgramCounter(-8);
-    UpdateProgramCounter(imm);
+    // UpdateProgramCounter(-8);
+    // UpdateProgramCounter(imm);
+    actual_target_pc = static_cast<uint64_t>(static_cast<int64_t>(id_ex_read.pc) + imm);
     // a
-    ex_mem_write.branch_target_pc = program_counter_;
+    // ex_mem_write.branch_target_pc = program_counter_;
   }
 
 
   if (opcode==get_instr_encoding(Instruction::kauipc).opcode) { // AUIPC
     execution_result_ = static_cast<int64_t>(program_counter_) - 4 + (imm << 12);
   }
+
+
+  // implementing the correction unit in hazard detection
+  ex_mem_write.actual_taken = branch_flag_;
+  ex_mem_write.actual_target_pc = actual_target_pc;
+  ex_mem_write.is_branch = id_ex_read.branch;
+  ex_mem_write.predicted_taken = id_ex_read.predicted_taken;
 
   // a
   // adding new data to intermediate register
@@ -316,6 +344,10 @@ void RVSSVM::ExecuteFloat() {
   // std::cout << "execution result: " << execution_result_ << std::endl;
 
   // a
+  // implementing the correction unit in hazard detection
+  ex_mem_write.is_branch = id_ex_read.branch;
+  ex_mem_write.predicted_taken = id_ex_read.predicted_taken;
+
   // adding new data to intermediate register
   ex_mem_write.alu_result = execution_result_;
   ex_mem_write.branch_taken = branch_flag_;
@@ -1019,25 +1051,56 @@ void RVSSVM::HazardDetectionUnit(){
   stall = forward_from_ex_mem = forward_from_mem_wb = load_use_hazard = jal_jalr_hazard = false; 
 
   // check for control hazard
-  if(ex_mem_write.branch_taken){
-    std::cout<<"branch taken"<<std::endl;
-    // if branch is taken then we have to flush only second stage 
-    // and run next iteration from new PC
-    
-    // if_id_write = {}; // we dont need this as the instruction fetched after running the excute stage 
-    // will be from the taken branch so its correct instruction, no need to flush it
-    
-    // UpdateProgramCounter(-4);
-    stall = true;
-    id_ex_write = {};
+  if(ex_mem_write.is_branch){
+    if(ex_mem_write.actual_taken == ex_mem_write.predicted_taken){
+      std::cout<<"Right Prediction"<<std::endl;
+      // prediction is correct
+      // return;
+    }
+    else{
+      // our prediction is wrong
+      std::cout<<"Wrong Prediction"<<std::endl;
+
+      // PredictionEntry& entry = branch_predictor_table_[ex_mem_write.pc];
+      // entry.taken = ex_mem_write.actual_taken;
+      // if (ex_mem_write.actual_taken) {
+      //   entry.target_pc = ex_mem_read.actual_target_pc; // Store the target
+      // }
+
+      id_ex_write = {};
+      if_id_write = {};
+
+      if(ex_mem_write.actual_taken){
+        program_counter_ = ex_mem_write.actual_target_pc;
+      }
+      else{
+        program_counter_ = ex_mem_write.pc+4;
+      }
+    }
     ex_mem_write.branch_taken = false;
-    return;
+    branch_predictor_table_[ex_mem_write.pc] = {ex_mem_write.actual_taken, ex_mem_write.actual_target_pc};
+    // ex_mem_write.is_branch = false;
+    // return;
   }
+  // if(ex_mem_write.branch_taken){
+  //   std::cout<<"branch taken"<<std::endl;
+  //   // if branch is taken then we have to flush only second stage 
+  //   // and run next iteration from new PC
+    
+  //   // if_id_write = {}; // we dont need this as the instruction fetched after running the excute stage 
+  //   // will be from the taken branch so its correct instruction, no need to flush it
+    
+  //   // UpdateProgramCounter(-4);
+  //   stall = true;
+  //   id_ex_write = {};
+  //   ex_mem_write.branch_taken = false;
+  //   return;
+  // }
 
   // implement differencing b/w GPR and FPR
 
   // check for hazards and change control signals accordingly
-  if(ex_mem_write.reg_write && ex_mem_write.rd_num != 0
+  if(ex_mem_write.reg_write && ((!ex_mem_write.rd_is_fpr && ex_mem_write.rd_num != 0) || ex_mem_write.rd_is_fpr)
     && ((id_ex_write.rs1_num == ex_mem_write.rd_num && id_ex_write.rs1_is_fpr == ex_mem_write.rd_is_fpr) 
       || (id_ex_write.rs2_num == ex_mem_write.rd_num && id_ex_write.rs2_is_fpr == ex_mem_write.rd_is_fpr))){
     
@@ -1057,7 +1120,7 @@ void RVSSVM::HazardDetectionUnit(){
     }
   } 
 
-  if(mem_wb_write.reg_write && mem_wb_write.rd_num != 0
+  if(mem_wb_write.reg_write && ((!mem_wb_write.rd_is_fpr && mem_wb_write.rd_num != 0) || (mem_wb_write.rd_is_fpr))
     && ((id_ex_write.rs1_num == mem_wb_write.rd_num && id_ex_write.rs1_is_fpr == mem_wb_write.rd_is_fpr) 
       || (id_ex_write.rs2_num == mem_wb_write.rd_num && id_ex_write.rs2_is_fpr == mem_wb_write.rd_is_fpr))){
     // stall = true;
@@ -1094,13 +1157,13 @@ void RVSSVM::HazardDetectionUnit(){
 
 void RVSSVM::CorrectionUnit(){
 
-
   if(forward_from_mem_wb){ // forwarding alu result
     uint8_t opcode = (mem_wb_write.instruction & 0b1111111);
     if((opcode == 0b1101111 || opcode == 0b1100111)){
       jal_jalr_hazard = true;
     }
-    if(id_ex_write.rs1_num == mem_wb_write.rd_num){
+    if(id_ex_write.rs1_num == mem_wb_write.rd_num 
+      && id_ex_write.rs1_is_fpr == mem_wb_write.rd_is_fpr){
       if(jal_jalr_hazard){
         id_ex_write.reg1_value = mem_wb_write.next_pc;
       }
@@ -1108,7 +1171,8 @@ void RVSSVM::CorrectionUnit(){
         id_ex_write.reg1_value = mem_wb_write.alu_result;
       }
     }
-    if(id_ex_write.rs2_num == mem_wb_write.rd_num){
+    if(id_ex_write.rs2_num == mem_wb_write.rd_num 
+      && id_ex_write.rs2_is_fpr == mem_wb_write.rd_is_fpr){
       if(jal_jalr_hazard){
         id_ex_write.reg2_value = mem_wb_write.next_pc;
       }
@@ -1119,10 +1183,12 @@ void RVSSVM::CorrectionUnit(){
     jal_jalr_hazard = false;
   }
   if(load_use_hazard){ // forwarding mem_read_data
-    if(id_ex_write.rs1_num == mem_wb_write.rd_num){
+    if(id_ex_write.rs1_num == mem_wb_write.rd_num 
+      && id_ex_write.rs1_is_fpr == mem_wb_write.rd_is_fpr){
       id_ex_write.reg1_value = mem_wb_write.memory_read_data;
     }
-    if(id_ex_write.rs2_num == mem_wb_write.rd_num){
+    if(id_ex_write.rs2_num == mem_wb_write.rd_num 
+      && id_ex_write.rs2_is_fpr == mem_wb_write.rd_is_fpr){
       id_ex_write.reg2_value = mem_wb_write.memory_read_data;
     }
   }
@@ -1131,7 +1197,8 @@ void RVSSVM::CorrectionUnit(){
     if((opcode == 0b1101111 || opcode == 0b1100111)){
       jal_jalr_hazard = true;
     }
-    if(id_ex_write.rs1_num == ex_mem_write.rd_num){
+    if(id_ex_write.rs1_num == ex_mem_write.rd_num 
+      && id_ex_write.rs1_is_fpr == ex_mem_write.rd_is_fpr){
       if(jal_jalr_hazard){
         id_ex_write.reg1_value = ex_mem_write.next_pc;
       }
@@ -1139,7 +1206,8 @@ void RVSSVM::CorrectionUnit(){
         id_ex_write.reg1_value = ex_mem_write.alu_result;
       }
     }
-    if(id_ex_write.rs2_num == ex_mem_write.rd_num){
+    if(id_ex_write.rs2_num == ex_mem_write.rd_num 
+      && id_ex_write.rs2_is_fpr == ex_mem_write.rd_is_fpr){
       if(jal_jalr_hazard){
         id_ex_write.reg2_value = ex_mem_write.next_pc;
       }

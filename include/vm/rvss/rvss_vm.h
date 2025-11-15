@@ -15,11 +15,13 @@
 #include <vector>
 #include <iostream>
 #include <cstdint>
+#include<bits/stdc++.h>
 
 // adding pipeline registers
 struct IF_ID_Register{
   uint32_t instruction = 0x13;
   uint64_t pc = 0;
+  bool predicted_taken = false;
 };
 
 struct ID_EX_Register{
@@ -34,6 +36,7 @@ struct ID_EX_Register{
   bool rd_is_fpr = false;
   bool rs1_is_fpr = true;
   bool rs2_is_fpr = true;
+  bool predicted_taken = false;
 
   bool reg_write = false;
   bool mem_read = false;
@@ -57,6 +60,12 @@ struct EX_MEM_Register{
   bool rd_is_fpr = false;
   bool rs1_is_fpr = true;
   bool rs2_is_fpr = true;
+  
+  bool predicted_taken = false;
+  bool is_branch = false;         // Was this instruction a branch?
+  bool actual_taken = false;      // Was the branch actually taken?
+  uint64_t actual_target_pc = 0; // What was the actual target PC?
+
 
   // Control Signals (passed through)
   bool reg_write = false;
@@ -206,7 +215,14 @@ class RVSSVM : public VmBase {
   ID_EX_Register id_ex_read, id_ex_write;
   EX_MEM_Register ex_mem_read, ex_mem_write;
   MEM_WB_Register mem_wb_read, mem_wb_write;
-  // --
+  // a
+
+  struct PredictionEntry {
+    bool taken = false; // The 1-bit prediction (false = Not Taken, true = Taken)
+    uint64_t target_pc = 0; // The predicted target_pc if taken
+  };
+
+  std::unordered_map<uint64_t, PredictionEntry> branch_predictor_table_;
 
   void Fetch();
 
